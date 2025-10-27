@@ -1,9 +1,9 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="id">
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>ZORA Loss Calculator — Live DexScreener</title>
+<title>ZORA Loss Calculator — Live DexScreener + Binance</title>
 <style>
   :root { --bg:#0b0f13; --card:#141a21; --text:#e8eef6; --muted:#9db0c2; --accent:#4fd1c5; --bad:#ff7878; --good:#8be28b;}
   *{box-sizing:border-box}
@@ -70,6 +70,9 @@
       <button class="btn" id="refresh">Refresh now</button>
       <span class="pill" id="status">Idle</span>
     </div>
+    <div class="small" style="margin-top:8px">
+      Tips: jangan set interval terlalu kecil (&lt; 5 dtk) supaya tidak kena rate-limit.
+    </div>
   </div>
 
   <div class="card">
@@ -113,60 +116,76 @@ function fmt(n, d=6){
 }
 function setStatus(msg){ $('status').textContent = msg; }
 
-// Fetch ETH price from Binance
+// ETH price from Binance
 async function fetchEthUsd(){
   try{
     const r = await fetch('https://api.binance.com/api/v3/ticker/price?symbol=ETHUSDT',{cache:'no-store'});
     const j = await r.json();
-    return Number(j.price);
+    const px = Number(j.price);
+    if(!isFinite(px)) throw new Error('bad ETH px');
+    return px;
   }catch(e){ setStatus('ETH fetch fail'); return NaN; }
 }
 
-// Fetch ZORA price from DexScreener pair
+// ZORA price from DexScreener (PAIR endpoint)
+// e.g. https://dexscreener.com/base/<pairAddress>
 async function fetchZoraUsd(){
   try{
     const url = $('pairUrl').value.trim();
-    const pair = url.split('/').pop();
-    const r = await fetch(`https://api.dexscreener.com/latest/dex/pairs/base/${pair}`,{cache:'no-store'});
+    if(!url) return NaN;
+    const u = new URL(url);
+    const parts = u.pathname.split('/').filter(Boolean); // ["base", "<pair>"]
+    const chain = parts[0], pair = parts[1];
+    if(!chain || !pair) throw new Error('bad pair url');
+
+    const r = await fetch(`https://api.dexscreener.com/latest/dex/pairs/${chain}/${pair}`, {cache:'no-store'});
     const j = await r.json();
-    const px = Number(j?.pair?.baseTokenPriceUsd);
+
+    // field yang benar: pair.priceUsd (string)
+    const px = Number(j?.pair?.priceUsd);
     if(isFinite(px)) return px;
-  }catch(e){ setStatus('ZORA fetch fail'); }
-  return NaN;
+
+    throw new Error('price not found');
+  }catch(e){
+    setStatus('ZORA fetch fail');
+    return NaN;
+  }
 }
 
-function recalc(ethUsd,zoraUsd){
+function recalc(ethUsd, zoraUsd){
   const initialZora = parseFlex($('initialZora').value);
   const currentZora = parseFlex($('currentZora').value);
   const weth = parseFlex($('currentWETH').value);
-
-  if(!isFinite(ethUsd)||!isFinite(zoraUsd)) return;
+  if(![ethUsd,zoraUsd,initialZora,currentZora,weth].every(isFinite)) return;
 
   const zoraPerEth = ethUsd / zoraUsd;
   const wethInZora = weth * zoraPerEth;
   const nowZora = currentZora + wethInZora;
   const pnl = nowZora - initialZora;
-  const pct = (pnl/initialZora)*100;
+  const pct = (pnl / initialZora) * 100;
 
   $('kpiZpe').textContent = fmt(zoraPerEth) + ' ZORA';
   $('kpiWethInZora').textContent = fmt(wethInZora) + ' ZORA';
   $('kpiNow').textContent = fmt(nowZora) + ' ZORA';
-  $('kpiPnL').textContent = (pnl>=0?'+':'')+fmt(pnl)+' ZORA';
+  $('kpiPnL').textContent = (pnl>=0?'+':'') + fmt(pnl) + ' ZORA';
   $('kpiPnL').className = 'value ' + (pnl>=0?'ok':'warn');
-  $('kpiPct').textContent = (pct>=0?'+':'')+fmt(pct,2)+' %';
+  $('kpiPct').textContent = (pct>=0?'+':'') + fmt(pct,2) + ' %';
 }
 
 async function refreshNow(){
-  setStatus('Fetching...');
-  const [eth,zora] = await Promise.all([fetchEthUsd(),fetchZoraUsd()]);
-  if(isFinite(eth)&&isFinite(zora)){ setStatus('Live OK'); recalc(eth,zora); }
-  else setStatus('Fetch fail');
+  setStatus('Fetching…');
+  const [eth, zora] = await Promise.all([fetchEthUsd(), fetchZoraUsd()]);
+  if(isFinite(eth) && isFinite(zora)){
+    setStatus('Live OK');
+    recalc(eth, zora);
+  } else {
+    setStatus('Fetch fail');
+  }
 }
-
 $('refresh').addEventListener('click', refreshNow);
 
-// auto refresh
-let timer=null;
+// Auto refresh
+let timer = null;
 function startAuto(){
   if(timer) clearInterval(timer);
   const sec = Math.max(5, parseInt($('intervalSec').value || '15', 10));
