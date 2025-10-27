@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>ZORA Loss Calculator — Live DexScreener</title>
+<style>
+  :root { --bg:#0b0f13; --card:#141a21; --text:#e8eef6; --muted:#9db0c2; --accent:#4fd1c5; --bad:#ff7878; --good:#8be28b;}
+  *{box-sizing:border-box}
+  body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,Inter,Helvetica,Arial,sans-serif;background:var(--bg);color:var(--text)}
+  header{padding:18px 20px;text-align:center;border-bottom:1px solid #1e2630;background:linear-gradient(180deg,#0f141a,#0b0f13);position:sticky;top:0}
+  main{max-width:900px;margin:22px auto;padding:0 14px 60px}
+  h1{margin:0;font-size:20px}
+  h2{font-size:15px;margin:0 0 10px;color:var(--muted);font-weight:700}
+  .card{background:var(--card);border:1px solid #1f2933;border-radius:14px;padding:16px;margin:12px 0;box-shadow:0 10px 30px rgba(0,0,0,.25)}
+  label{display:block;font-size:12px;color:var(--muted);margin:8px 0 6px}
+  input{width:100%;padding:11px;border-radius:10px;background:#0d1217;border:1px solid #243140;color:var(--text);font-size:14px}
+  input:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px rgba(79,209,197,.12)}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px}
+  .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+  .btn{cursor:pointer;background:var(--accent);color:#052b27;border:0;border-radius:10px;padding:10px 14px;font-weight:700}
+  .btn.secondary{background:#0f171f;color:var(--muted);border:1px solid #223041}
+  .pill{display:inline-block;padding:6px 10px;border-radius:999px;background:#0f171f;border:1px solid #223041;color:var(--muted);font-size:12px}
+  .kpi{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;margin-top:8px}
+  .kpi .item{background:#0f141a;border:1px solid #1f2a35;border-radius:12px;padding:14px}
+  .kpi .label{font-size:12px;color:var(--muted)}
+  .kpi .value{font-size:22px;margin-top:6px}
+  .warn{color:var(--bad)} .ok{color:var(--good)}
+  .small{color:var(--muted);font-size:12px}
+</style>
+</head>
+<body>
+<header>
+  <h1>ZORA Loss Calculator (Live)</h1>
+  <div class="small">Harga ETH dari Binance • Harga ZORA dari DexScreener Pair</div>
+</header>
+
+<main>
+  <div class="card">
+    <h2>1) Masukan Dasar</h2>
+    <div class="grid">
+      <div>
+        <label>Modal awal (ZORA)</label>
+        <input id="initialZora" value="45700" />
+      </div>
+      <div>
+        <label>ZORA yang kamu terima sekarang (ZORA)</label>
+        <input id="currentZora" value="39950" />
+      </div>
+      <div>
+        <label>WETH yang kamu terima sekarang (ETH)</label>
+        <input id="currentWETH" value="0.127639" />
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>2) Sumber Harga</h2>
+    <div class="grid">
+      <div>
+        <label>DexScreener Pair URL</label>
+        <input id="pairUrl" value="https://dexscreener.com/base/0xedc625b74537ee3a10874f53d170e9c17a906b9c" />
+      </div>
+      <div>
+        <label>Refresh interval (detik)</label>
+        <input id="intervalSec" value="15" />
+      </div>
+    </div>
+    <div class="row" style="margin-top:10px">
+      <button class="btn" id="refresh">Refresh now</button>
+      <span class="pill" id="status">Idle</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>3) Hasil</h2>
+    <div class="kpi">
+      <div class="item">
+        <div class="label">1 ETH =</div>
+        <div class="value" id="kpiZpe">– ZORA</div>
+      </div>
+      <div class="item">
+        <div class="label">Nilai WETH dalam ZORA</div>
+        <div class="value" id="kpiWethInZora">– ZORA</div>
+      </div>
+      <div class="item">
+        <div class="label">ZORA ekuivalen sekarang</div>
+        <div class="value" id="kpiNow">– ZORA</div>
+      </div>
+      <div class="item">
+        <div class="label">Rugi / Untung (ZORA)</div>
+        <div class="value" id="kpiPnL">– ZORA</div>
+      </div>
+      <div class="item">
+        <div class="label">% Perubahan dari modal</div>
+        <div class="value" id="kpiPct">– %</div>
+      </div>
+    </div>
+  </div>
+</main>
+
+<script>
+const $ = (id)=>document.getElementById(id);
+function parseFlex(v){
+  v = String(v ?? '').trim().replace(/\s/g,'').replace(',', '.');
+  if(!v) return NaN;
+  const n = Number(v);
+  return isFinite(n) ? n : NaN;
+}
+function fmt(n, d=6){
+  if(!isFinite(n)) return '–';
+  return Number(n).toLocaleString(undefined,{maximumFractionDigits:d});
+}
+function setStatus(msg){ $('status').textContent = msg; }
+
+// Fetch ETH price from Binance
+async function fetchEthUsd(){
+  try{
+    const r = await fetch('https://api.binance.com/api/v3/ticker/price?symbol=ETHUSDT',{cache:'no-store'});
+    const j = await r.json();
+    return Number(j.price);
+  }catch(e){ setStatus('ETH fetch fail'); return NaN; }
+}
+
+// Fetch ZORA price from DexScreener pair
+async function fetchZoraUsd(){
+  try{
+    const url = $('pairUrl').value.trim();
+    const pair = url.split('/').pop();
+    const r = await fetch(`https://api.dexscreener.com/latest/dex/pairs/base/${pair}`,{cache:'no-store'});
+    const j = await r.json();
+    const px = Number(j?.pair?.baseTokenPriceUsd);
+    if(isFinite(px)) return px;
+  }catch(e){ setStatus('ZORA fetch fail'); }
+  return NaN;
+}
+
+function recalc(ethUsd,zoraUsd){
+  const initialZora = parseFlex($('initialZora').value);
+  const currentZora = parseFlex($('currentZora').value);
+  const weth = parseFlex($('currentWETH').value);
+
+  if(!isFinite(ethUsd)||!isFinite(zoraUsd)) return;
+
+  const zoraPerEth = ethUsd / zoraUsd;
+  const wethInZora = weth * zoraPerEth;
+  const nowZora = currentZora + wethInZora;
+  const pnl = nowZora - initialZora;
+  const pct = (pnl/initialZora)*100;
+
+  $('kpiZpe').textContent = fmt(zoraPerEth) + ' ZORA';
+  $('kpiWethInZora').textContent = fmt(wethInZora) + ' ZORA';
+  $('kpiNow').textContent = fmt(nowZora) + ' ZORA';
+  $('kpiPnL').textContent = (pnl>=0?'+':'')+fmt(pnl)+' ZORA';
+  $('kpiPnL').className = 'value ' + (pnl>=0?'ok':'warn');
+  $('kpiPct').textContent = (pct>=0?'+':'')+fmt(pct,2)+' %';
+}
+
+async function refreshNow(){
+  setStatus('Fetching...');
+  const [eth,zora] = await Promise.all([fetchEthUsd(),fetchZoraUsd()]);
+  if(isFinite(eth)&&isFinite(zora)){ setStatus('Live OK'); recalc(eth,zora); }
+  else setStatus('Fetch fail');
+}
+
+$('refresh').addEventListener('click', refreshNow);
+
+// auto refresh
+let timer=null;
+function startAuto(){
+  if(timer) clearInterval(timer);
+  const sec = Math.max(5, parseInt($('intervalSec').value || '15', 10));
+  timer = setInterval(refreshNow, sec*1000);
+}
+$('intervalSec').addEventListener('input', startAuto);
+
+refreshNow();
+startAuto();
+</script>
+</body>
+</html>
